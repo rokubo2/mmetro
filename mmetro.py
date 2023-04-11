@@ -19,8 +19,8 @@ class Mmetro_Utils():
                  chirpDur = 125,
                  switchPer = 2500e-6,
                  modDuty = 50,
-                 fs = 1.0e6
-                 ) -> None:
+                 fs = 1.0e6,
+                 RMin = 1) -> None:
         
         self.maxRange = maxRange
         self.chirpDur = chirpDur
@@ -29,6 +29,7 @@ class Mmetro_Utils():
         self.modDuty = modDuty
         self.fs = fs
         self.modF = 1 / (2 * switchPer)
+        self.RMin = RMin
 
         return
     
@@ -49,7 +50,7 @@ class Mmetro_Utils():
         vRange = np.arange(nFFT) / nFFT * self.fs * self.c0 / (2*kf)
         fc = (cfg['fStop'] + cfg['fStrt']) / 2
         
-        RMin = 2.5
+        RMin = self.RMin
         RMax = min(self.maxRange, (N / TRampUp) * self.c0 / (4 * 250e6 / TRampUp))
         RMinIdx = np.argmin(np.abs(vRange - RMin))
         RMaxIdx = np.argmin(np.abs(vRange - RMax))
@@ -234,7 +235,7 @@ class Mmetro_Utils():
                 RD_norm = RD_diff / np.max(np.abs(RD))
                 RD_norm[RD_norm < threshold] = 0
                 
-                velArr = np.arange(-5,5,0.1)
+                velArr = np.arange(-10,1,0.1)
                 templateAll = self.create_template(velArr, cfg, nFFT_vel)
                 templateAll = templateAll[:, cut[0]:-cut[1]]
 
@@ -244,13 +245,13 @@ class Mmetro_Utils():
                 
                 
             timestamps = self.get_timestamps(data_raw)
-                    
-            plt.plot(timestamps, position)
+
+            plt.scatter(timestamps, position, s=5)
             plt.xlabel('time (ms)')
             plt.ylabel('range (m)')
             
             plt.figure()
-            plt.plot(timestamps, vel)
+            plt.scatter(timestamps, vel, s=5)
             
             
             if save:
@@ -260,9 +261,9 @@ class Mmetro_Utils():
                 if not os.path.exists(path):
                     os.makedirs(path)
                 if file_name:
-                    np.save(path+ '/' + file_name + '_data.npy', to_save)
+                    np.save(path+ '/' + file_name + '.npy', to_save)
                     plt.savefig(path + '/' + file_name + '_plot.png')
-                    np.save(path+ '/' + file_name + '_vel_data.npy', to_save_v)
+                    np.save(path+ '/' + file_name + '_vel.npy', to_save_v)
                 else:
                     np.save(path+ '/processed_range_time.npy', to_save)
                     plt.savefig(path + '/range_time_plot.png')
