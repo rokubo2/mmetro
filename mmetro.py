@@ -16,21 +16,18 @@ from scipy import signal
 class Mmetro_Utils():
     def __init__(self,
                  maxRange = 30,
-                 chirpDur = 125,
                  switchPer = 2500e-6,
                  modDuty = 50,
                  fs = 1.0e6,
                  RMin = 1) -> None:
         
         self.maxRange = maxRange
-        self.chirpDur = chirpDur
         self.c0 = speed_of_light
         self.swichDur = switchPer
         self.modDuty = modDuty
         self.fs = fs
         self.modF = 1 / (2 * switchPer)
         self.RMin = RMin
-
         return
     
     def hanning(self, M, *varargin):
@@ -176,17 +173,18 @@ class Mmetro_Utils():
     def get_position(self, RD_norm, templateAll, vRangeExt):
         max_max_corr = 0
         max_idx = 0
-        for i in range(len(templateAll)):
-            template = templateAll[i]
-            corr = np.abs(RD_norm) * np.repeat(np.abs(template[:, np.newaxis]), RD_norm.shape[0], axis = 1).T
-            corr_sum = np.sum(np.abs(corr), axis=1)
-            max_corr = np.max(corr_sum)
-            if max_corr > max_max_corr:
-                vel_i = i
-                max_max_corr = max_corr
-                max_idx = np.argmax(corr_sum)
+        cor_array = np.zeros((RD_norm.shape[1], templateAll.shape[0]))
+        temp = np.zeros((RD_norm.shape[1], templateAll.shape[0]))
+        for antenna_i in range(4):
+            for velocity_i in range(len(templateAll)):
+                template = templateAll[velocity_i]
+                temp[:,velocity_i] = np.sum(RD_norm[antenna_i,:,:] * np.repeat(np.abs(template[:, np.newaxis]), RD_norm.shape[1], axis = 1).T, axis=1)
+            cor_array += temp
+            
+        max_idx = np.argmax(cor_array)
                                     
-        range_idx = max_idx
+        range_idx = max_idx // cor_array.shape[1]
+        vel_i = max_idx % cor_array.shape[1]
         to_return = vRangeExt[range_idx]
         return to_return, vel_i, range_idx, max_max_corr
 
@@ -209,57 +207,73 @@ class Mmetro_Utils():
                 date_time_obj.append(delta.total_seconds()) 
         return date_time_obj
     
-    def process_plot(self, names, save=True, save_dir = 'Data/', file_name = None, cut=[30,30], threshold=0.3):
-        for names_i in range(len(names)):
-            file = open(names[names_i], 'rb')
-            data_raw = pickle.load(file)
-            file.close()
-            data_single_chn = data_raw['Data'][:,:,0]
-            cfg = data_raw['Cfg']
-            n_frame = data_single_chn.shape[1]
-            position = np.zeros(n_frame)
-            vel = np.zeros(n_frame)
-            nFFT = 2**10
-            nFFT_vel = 2**8
+    def process_plot(self, names, save=True, save_dir = 'Data/', file_name = None, cut=[30,30], threshold=0.3, other={}):
+        nFFT = 2**10
+        nFFT_vel = 2**8
+        for names_i in range(len(names)):           
             
             pprint("start processing " + names[names_i])
 
+            file = open(names[names_i], 'rb')
+            data_raw = pickle.load(file)
+            file.close()
+            cfg = data_raw['Cfg']
+            n_frame = data_raw['Data'].shape[1]
+
+            velArr = np.arange(-10,1,0.1)
+            templateAll = self.create_template(velArr, cfg, nFFT_vel)
+            templateAll = templateAll[:, cut[0]:-cut[1]]
+
+            
+            position = np.zeros(n_frame)
+            vel = np.zeros(n_frame)
+            
+            
             f = IntProgress(min=0, max=n_frame) # instantiate the bar
             display(f)
-            for i in range(n_frame):
-                data_snapshot = data_single_chn[:,i]
-                RPExt, RD, vRangeExt = self.get_RP_RD(data_snapshot, cfg, nFFT, nFFT_vel)
-                
-                RD = RD[:,cut[0]:-cut[1]]
-                RD_diff = np.abs(RD) - np.min(np.abs(RD))
-                RD_norm = RD_diff / np.max(np.abs(RD))
-                RD_norm[RD_norm < threshold] = 0
-                
-                velArr = np.arange(-10,1,0.1)
-                templateAll = self.create_template(velArr, cfg, nFFT_vel)
-                templateAll = templateAll[:, cut[0]:-cut[1]]
+            
+            for frame_i in range(n_frame):
+                flag = True
+                for antenna_i in range(4):
+                    data_single_chn = data_raw['Data'][:,:,antenna_i]
+                    data_snapshot = data_single_chn[:,frame_i]
 
-                position[i], vel_i, _, _ = self.get_position(RD_norm, templateAll, vRangeExt)
-                vel[i] = velArr[vel_i]
+                    _, RD, vRangeExt = self.get_RP_RD(data_snapshot, cfg, nFFT, nFFT_vel)
+            
+                    RD = RD[:,cut[0]:-cut[1]]
+                    RD_diff = np.abs(RD) - np.min(np.abs(RD))
+                    if flag:
+                        RD_norm = np.zeros((4,RD_diff.shape[0],RD_diff.shape[1]))
+                        flag = False
+                    RD_norm[antenna_i,:,:] = RD_diff / np.max(np.abs(RD))
+                    RD_norm[RD_norm < threshold] = 0
+
+                position[frame_i], vel_i, _, _ = self.get_position(RD_norm, templateAll, vRangeExt)
+                vel[frame_i] = velArr[vel_i]
                 f.value += 1
                 
                 
             timestamps = self.get_timestamps(data_raw)
+            if 'range' in other.keys():
+                range_reading = other['range'][names_i]
+                plt.title(f"range: {range_reading}m")
 
             plt.scatter(timestamps, position, s=5)
             plt.xlabel('time (ms)')
             plt.ylabel('range (m)')
             
-            plt.figure()
-            plt.scatter(timestamps, vel, s=5)
             
             
             if save:
                 to_save = [timestamps, position]
                 to_save_v = [timestamps, vel]
                 path = save_dir + names[names_i][28:-7]
+                path_2 = save_dir + "all/"
                 if not os.path.exists(path):
                     os.makedirs(path)
+                if not os.path.exists(path_2):
+                    os.makedirs(path_2)
+                plt.savefig(path_2 + names[names_i][28:-7] + '.png')
                 if file_name:
                     np.save(path+ '/' + file_name + '.npy', to_save)
                     plt.savefig(path + '/' + file_name + '_plot.png')
